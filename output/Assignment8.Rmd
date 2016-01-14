@@ -1,0 +1,123 @@
+---
+title: "Exercise8"
+author: "MGI 22, Joris Wever, Erwin van den Berg"
+date: "January 14, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Exercise 8 of the Geo-Scripting Course
+
+Objective: create linear model object and predict vcf (tree coverage) values for the Gewata area
+
+github link:  <>
+
+## Step 1: Pre-processing
+
+Open the libraries, import and load the files.
+```{r intro}
+library(raster)
+
+source('R/importFromUrl.R')
+
+importFromUrl("https://github.com/GeoScripting-WUR/AdvancedRasterAnalysis/archive/gh-pages.zip")
+
+load("data/AdvancedRasterAnalysis-gh-pages/data/GewataB1.rda")
+load("data/AdvancedRasterAnalysis-gh-pages/data/GewataB2.rda")
+load("data/AdvancedRasterAnalysis-gh-pages/data/GewataB3.rda")
+load("data/AdvancedRasterAnalysis-gh-pages/data/GewataB4.rda")
+load("data/AdvancedRasterAnalysis-gh-pages/data/GewataB5.rda")
+load("data/AdvancedRasterAnalysis-gh-pages/data/GewataB7.rda")
+load("data/AdvancedRasterAnalysis-gh-pages/data/vcfGewata.rda")
+```
+
+Remove unrealistic values from the vcf (tree cover) file. 
+```{r cleandata}
+vcfGewata[vcfGewata > 100] <- NA
+```
+
+Put all bands in a raster brick.
+```{r brick}
+alldata <- brick(GewataB1, GewataB2, GewataB3, GewataB4, GewataB5, GewataB7, vcfGewata)
+names(alldata) <- c("band1", "band2", "band3", "band4", "band5", "band7", "VCF")
+```
+
+Plot the bands in pairs to show correlation.
+```{r plotpairs}
+pairs(alldata)
+pairs(brick(vcfGewata, GewataB3))
+pairs(brick(vcfGewata, GewataB7))
+```
+
+Extract all data to a data frame.
+```{r constructDF}
+df <- as.data.frame(getValues(alldata))
+```
+
+## Step 2: construct a linear model
+Create a linear model object.
+```{r LM}
+modelLM <- lm(formula = VCF ~ band1 + band2 + band3 + band4 + band5 + band7, data = df) 
+summary(modelLM)
+```
+One of the column names resulting from the summary is named ‘Pr(>|t|)’. This column shows the probability that this correlation results from coincidence. So, if this value is small this probability is small. In this case, all the bands are of major importance, except band 7.
+
+## Step 3: Predict tree cover
+Construct new brick layer without vcf_Gewata.
+```{r bricknovcf}
+gewata_novcf <- brick(GewataB1, GewataB2, GewataB3, GewataB4, GewataB5, GewataB7)
+names(gewata_novcf) <- c("band1", "band2", "band3", "band4", "band5", "band7")
+```
+
+Predict vcf values for the Gewata area based on Landsat bands. Also, exclude values below zero.
+```{r pred}
+predLC <- predict(gewata_novcf, model=modelLM, na.rm=TRUE)
+predLC[predLC < 0] <- NA
+```
+
+Plot predicted tree cover.
+```{r plot_predicted}
+plot(predLC, main="Predicted tree coverage", zlim=c(0,100))
+```
+
+Plot actual tree cover.
+```{r plot_actual}
+plot(vcfGewata, main="Actual tree coverage", zlim=c(0,100))
+```
+
+## Step 4: Calculate RMSE (Root Mean Squarred Error)
+```{r rmse}
+sqdif <- (vcfGewata-predLC)^2
+sqdifdf <- as.data.frame(sqdif)
+RMSE <- sqrt(mean(sqdifdf$layer, na.rm=TRUE))
+RMSE
+```
+
+## Step 5: Calculate difference between predicted and actual tree coverage per class
+Prepare training polygons.
+```{r training}
+load("data/AdvancedRasterAnalysis-gh-pages/data/trainingPoly.rda")
+trainingPoly@data$Code <- as.numeric(trainingPoly@data$Class)
+trainingPoly@data$Code
+ndvi <- overlay(GewataB4, GewataB3, fun=function(x,y){(x-y)/(x+y)})
+classes <- rasterize(trainingPoly, ndvi, field='Code')
+```
+
+Calculate RMSE for each class.
+```{r rmseClasses}
+averagediff<-zonal(sqdif, classes)
+RMSEClasses<-sqrt(averagediff[,2])
+names(RMSEClasses) <- c("cropland", "forest", "wetland")
+```
+
+RMSE for each class.
+```{r Finalrmse}
+RMSEClasses
+```
+
+The class wetland shows the biggest difference between predicted and actual tree cover.
+
+
